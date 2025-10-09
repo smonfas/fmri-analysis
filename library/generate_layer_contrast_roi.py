@@ -26,8 +26,7 @@ import warnings
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
-sys.path.append("/data/p_02389/code/fmri-analysis/library/")
-import layer_analysis as analysis
+from . import layer_analysis as analysis
 
 debug_print = True
 

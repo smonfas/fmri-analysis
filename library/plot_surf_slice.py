@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import nibabel as nib
-from voxeldepths_from_surfaces import load_fs_surf_in_grid
+from .voxeldepths_from_surfaces import load_fs_surf_in_grid
 
 
 def plot_surf_slice(surf, z_slice, color='k'):

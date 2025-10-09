@@ -20,12 +20,11 @@ import numpy as np
 import shutil
 
 # import dsargparse
-import argparse
 import warnings
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
-import layer_analysis as analysis
+from . import layer_analysis as analysis
 
 debug_print = False
 

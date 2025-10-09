@@ -34,8 +34,7 @@ as well as the contrast(s) to compute from these layers.
 
 
 import os
-
-import layer_analysis as analysis
+from . import layer_analysis as analysis
 import numpy as np
 from tempfile import TemporaryDirectory
 import nibabel as nib

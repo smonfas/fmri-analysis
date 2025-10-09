@@ -1,11 +1,7 @@
 import numpy as np
-import sys
-sys.path.append('/Users/denis/ownCloud/pfc-layers/analysis/fmri-analysis/library')
-sys.path.append('/data/p_02389/code/fmri-analysis/library')
-import voxeldepths_from_surfaces as vfs
+from . import voxeldepths_from_surfaces as vfs
 import nibabel as nib
-import os
-from numba import jit, prange
+from numba import jit
 from skimage.segmentation import expand_labels
 import matplotlib.pyplot as plt
 from joblib import Parallel, delayed, parallel_backend
