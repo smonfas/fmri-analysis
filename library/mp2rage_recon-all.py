@@ -16,8 +16,14 @@ if __name__ == "__main__":
     parser.add_argument("--spm_dir", type=str, help="path to spm installation")
     parser.add_argument(
         "--gdc_coeff_file",
-        help="run gradient disortion correction using specified coefficient file",
+        help="run gradient disortion correction using specified coefficient file",)
+    parser.add_argument(
+        "--ncpu",
+        type=int,
+        default=1,
+        help="number of CPUs to use for parallel processing (default: 1)",
     )
+
     args = parser.parse_args()
 
     if args.spm_dir is not None:
@@ -28,4 +34,5 @@ if __name__ == "__main__":
         args.uni,
         output_fs_dir=args.fs_dir,
         gdc_coeff_file=args.gdc_coeff_file,
+        n_cpu=args.ncpu
     )
