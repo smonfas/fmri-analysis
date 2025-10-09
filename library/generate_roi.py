@@ -25,7 +25,6 @@ import warnings
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
-sys.path.append("/data/p_02389/code/fmri-analysis/library/")
 import layer_analysis as analysis
 
 debug_print = False
@@ -45,6 +44,9 @@ def find_roi(
     fwhm=3,
     cwd=None,
     keep_tmp=False,
+    surf_roi_out=None,
+    surf_smoothed_stat_out=None,
+    surf_clusters_out=None,
 ):
     """
     Finds an roi that most closely meets criteria based on predefined regions (e.g. using atlas parcels and
@@ -64,9 +66,13 @@ def find_roi(
       anat_require_region: part of anat_region that cluster is strictly required to ovelap with (surface mask or None)
       fwhm: smoothing kernel width (only used together with cluster)
       cwd: current working directory (derived from output file if None)
+      keep_tmp: if True, keep temporary files
+      surf_roi_out: if set, save the resulting roi on the surface to this file
+      surf_smoothed_stat_out: if set, save the smoothed surface stat to this file
+      surf_clusters_out: if set, save the surface clusters befor max selection to this file
     """
 
-    # define function to calculate rois as a function of threshold
+    # define function to calculate rois on surface as a function of threshold
     def calc_roi(threshold):
         roi_surf_file = os.path.join(tmpdirname, f"roi.{hash(threshold)}.shape.gii")
         if not os.path.exists(roi_surf_file):
@@ -144,15 +150,18 @@ def find_roi(
             mid_surf=mid_surf,
             outfile=surf_stat_file,
             mask_file=None,
-            roi_out=no_coverage_file,
+            bad_vertices_out=no_coverage_file,
         )
 
         # 2. if cluster: smooth surface
         if cluster_roi:
+            # smooth only where there is coverage
+            valid_region_file = os.path.join(tmpdirname, "valid.shape.gii")
+            analysis.math_metric("!(not_covered)", valid_region_file,
+                                  not_covered=no_coverage_file)
             shutil.copyfile(surf_stat_file, surf_stat_file_nosm)
             analysis.smooth_surfmetric_hcp(
-                surf_stat_file, surf_stat_file, mid_surf, fwhm
-            )
+                surf_stat_file, surf_stat_file, mid_surf, fwhm=fwhm, roi=valid_region_file)
             shutil.copyfile(surf_stat_file, surf_stat_file_sm)
 
         # 4. Define optimization function
@@ -198,7 +207,22 @@ def find_roi(
                 # 4. get final roi (on surface)
                 tmp_roi = calc_roi(threshold)
 
-        shutil.copyfile(tmp_roi, os.path.join(tmpdirname, "roi.final.shape.gii"))
+        if surf_roi_out:
+            shutil.copyfile(tmp_roi, surf_roi_out)
+        else:
+            shutil.copyfile(tmp_roi, os.path.join(tmpdirname, "roi.final.shape.gii"))
+
+        if surf_smoothed_stat_out:
+            shutil.copyfile(surf_stat_file, surf_smoothed_stat_out)
+        
+        if surf_clusters_out:
+            # generate surface clusters from surf_stat_file_sm and the final threshold, without roi restriction
+            analysis.find_clusters_hcp(
+                    surf_stat_file,
+                    surf_clusters_out,
+                    mid_surf,
+                    threshold,
+                    min_area=0)
 
         # sample surface roi to volume:
         analysis.surf_to_vol_hcp(
