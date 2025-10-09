@@ -1448,6 +1448,61 @@ def write_stim_time_files(stim_times_runs, cwd=None):
                 print(*stim_times[condition], file=file)
     return condition_stim_files
 
+def average_trials_vaso_3ddeconvolve(in_files_nulled, in_files_notnulled, 
+                                     stim_times_runs, trial_duration, out_dir, desc=None,
+                                     polort=5, vaso_readout_delay=None, tentzero=False):
+    """Runs trial averaging on nulled and notnulled VASO data separately before
+    performing VASO bold correction on the averaged data.
+    """
+    if vaso_readout_delay is None:
+        # assume half of TR
+        vaso_readout_delay = 0.5 * nib.load(in_files_nulled[0]).header.get_zooms()[3]
+
+    if desc is not None:
+        desc = f"_{desc}"
+
+    with tempfile.TemporaryDirectory() as tmp_dir:        
+        # trial averaging for nulled and notnulled data separately
+        trialavg_files_nulled, baseline_file_nulled, fstat_file_nulled = average_trials_3ddeconvolve(
+            in_files_nulled,
+            stim_times_runs,
+            trial_duration,
+            out_files_basename=os.path.join(tmp_dir, f'trialavg_nulled{desc}'),
+            polort=polort,
+            tentzero=tentzero,
+            cwd=tmp_dir)
+
+        trialavg_files_notnulled, baseline_file_notnulled, fstat_file_notnulled = average_trials_3ddeconvolve(
+            in_files_notnulled,
+            stim_times_runs,
+            trial_duration,
+            out_files_basename=os.path.join(tmp_dir, f'trialavg_notnulled{desc}'),
+            polort=polort,
+            onset_shift=vaso_readout_delay,
+            tentzero=tentzero,
+            cwd=tmp_dir)
+
+        # bold correction on the averaged data, which contains one trial average per condition
+        trialavg_files_vaso = []
+        for trialavg_file_nulled, trialavg_file_notnulled in zip(trialavg_files_nulled, trialavg_files_notnulled):
+            trialavg_file_vaso = trialavg_file_nulled.replace("nulled", "vaso")
+            bold_correct(trialavg_file_nulled, trialavg_file_notnulled, trialavg_file_vaso)
+            trialavg_files_vaso.append(trialavg_file_vaso)
+        baseline_file_vaso = baseline_file_nulled.replace("nulled", "vaso")
+        bold_correct(baseline_file_nulled, baseline_file_notnulled, baseline_file_vaso)                     
+
+        # calculate percent signal change
+        trialavgs_notnulled_prcchg = calc_percent_change_trialavg(trialavg_files_notnulled, baseline_file_notnulled)
+        trialavgs_vaso_prcchg = calc_percent_change_trialavg(trialavg_files_vaso, baseline_file_vaso, inv_change=True)
+
+        # save results by copying
+        for trialavg_notnulled_prcchg, trialavg_vaso_prcchg in zip(trialavgs_notnulled_prcchg, trialavgs_vaso_prcchg):
+            copy2(trialavg_notnulled_prcchg, 
+                  os.path.join(out_dir, os.path.basename(trialavg_notnulled_prcchg).replace("notnulled", "bold")))
+            copy2(trialavg_vaso_prcchg, os.path.join(out_dir, os.path.basename(trialavg_vaso_prcchg)))  
+        copy2(fstat_file_notnulled, os.path.join(out_dir, os.path.basename(fstat_file_notnulled)).replace("notnulled", "bold"))
+        copy2(fstat_file_nulled, os.path.join(out_dir, os.path.basename(fstat_file_nulled)))
+ 
 
 def average_trials_3ddeconvolve(
     in_files,
