@@ -1277,8 +1277,7 @@ def get_stat_cluster_atlas(
     fwhm=5,
     threshold=2,
     force=False,
-    dont_repeat_sample_and_smooth=False,
-):
+    dont_repeat_sample_and_smooth=False):
     stat_file_dir = os.path.dirname(os.path.abspath(stat_file))
     stat_file_base = fsl_remove_ext(os.path.basename(os.path.abspath(stat_file)))
     stat_surf_smooth = os.path.join(
@@ -1336,8 +1335,7 @@ def get_funcloc_roi(
     stat_name="zstat1",
     fwhm=5,
     funcloc_labels=None,
-    force=False,
-):
+    force=False):
     if feat_dir == None:
         feat_dir = os.path.join(analysis_dir, "funcloc.feat")
     stat_file = os.path.join(feat_dir, "stats", stat_name + ".nii.gz")
@@ -1379,8 +1377,7 @@ def get_md_roi(
     ciftify_dir=None,
     fs_to_func_reg=None,
     md_labels=None,
-    force=False,
-):
+    force=False):
     """Returns a multiple-demand network ROI (Moataz et al. 2020) transformed to functional space"""
     if md_labels == None:
         md_labels = {
@@ -1406,8 +1403,7 @@ def get_glasser_roi(
     ciftify_dir=None,
     fs_to_func_reg=None,
     glasser_labels=None,
-    force=False,
-):
+    force=False):
     """Returns a HCP MMP 1.0 atlas ROI (Glasser et al. 2016) transformed to functional space"""
     if glasser_labels == None:
         glasser_labels = {
@@ -1426,7 +1422,7 @@ def get_glasser_roi(
     )
     return roi
 
-
+# Trial averaging related
 def calc_stim_times(onset_delay, trial_duration, trial_order, condition_names=None):
     n = len(trial_order)
     t = np.arange(0, n) * trial_duration + onset_delay
@@ -1434,7 +1430,6 @@ def calc_stim_times(onset_delay, trial_duration, trial_order, condition_names=No
     for condition in set(trial_order):
         stim_times[condition] = t[np.array(trial_order) == condition]
     return stim_times
-
 
 def write_stim_time_files(stim_times_runs, cwd=None):
     if cwd == None:
@@ -1464,8 +1459,7 @@ def average_trials_3ddeconvolve(
     cwd=None,
     tentzero=False,
     force=None,
-    IM=False,
-):
+    IM=False):
     if cwd == None:
         cwd = os.path.dirname(os.path.normpath(in_files[0]))
     n_files = len(in_files)
@@ -1616,8 +1610,7 @@ def calc_percent_change_trialavg(
     trialavg_files,
     baseline_file,
     inv_change=False,
-    force=False,
-):
+    force=False):
     if inv_change:
         expr = "100-(100*a/b)"
     else:
@@ -1643,8 +1636,7 @@ def calc_percent_change_trialavg(
 def calc_normalized_trialavg(
     trialavg_files,
     baseline_vols=None,
-    force=False,
-):
+    force=False):
     """
     Normalizes trial average by adding back baseline and dividing by mean from defined baseline volumes
     """
@@ -1725,8 +1717,7 @@ def add_postfix_to_nifti_basename(path, postfix):
 
 
 def get_funcact_roi_laynii(
-    act_file, rim_file, roi_out_file, n_columns=10000, threshold=1
-):
+    act_file, rim_file, roi_out_file, n_columns=10000, threshold=1):
     columns_file = add_postfix_to_nifti_basename(rim_file, "_columns" + str(n_columns))
     if not os.path.isfile(columns_file):
         mid_gm_file = add_postfix_to_nifti_basename(rim_file, "_midGM_equidist")
@@ -1803,8 +1794,7 @@ def mask_image(img, mask):
 
 
 def bold_correct(
-    nulled_file, notnulled_file, out_file, notnulled_shift=None, force=None
-):
+    nulled_file, notnulled_file, out_file, notnulled_shift=None, force=None):
     """notnulled_shift should equal (positive) difference between readout blocks"""
     if not os.path.isfile(out_file) or force == True:
         if notnulled_shift is not None:
@@ -1847,8 +1837,7 @@ def sample_timecourse(func_filename, roi):
 
 
 def calc_layers_laynii(
-    rim_file, out_file_base=None, method="equidist", n_layers=3, force=False
-):
+    rim_file, out_file_base=None, method="equidist", n_layers=3, force=False):
     # include upsampling methods?
     if out_file_base is None:
         out_file_base = fsl_remove_ext(rim_file)
