@@ -25,6 +25,7 @@ def calc_connectivity_list(surf):
     
     return connectivity_list
 
+# TODO: consider moving to a general library
 def calc_vertex_area(surf):
     """
     Calculate the vertex area for a given surface mesh.
@@ -108,7 +109,10 @@ def find_sorted_vertex_clusters(sorted_vertices, connectivity_list, area = None,
 
         # find all connected vertices and check wheter they already belong to a cluster
         connected_vertices = np.minimum(np.array(connectivity_list[vertex]),max_idx)
-        connected_cluster_idcs = {c for c in clusters_current[connected_vertices] if c != 0}
+        if len(connected_vertices) == 0:
+            connected_cluster_idcs = set()
+        else:
+            connected_cluster_idcs = {c for c in clusters_current[connected_vertices] if c != 0}
         
         # iteratively merge with all connected clusters
         cluster_idx_1 = clusters_current[vertex]
@@ -222,7 +226,7 @@ def cluster_surface(metric, surf, area=None,
         clusters_gii.add_gifti_data_array(GiftiDataArray(data=clusters, 
                                                               intent='NIFTI_INTENT_LABEL', 
                                                               datatype='NIFTI_TYPE_UINT32'))
-        nib.save(clusters_gii, output)
+        nib.save(clusters_gii, output, mode='compat')
     
     return clusters
     

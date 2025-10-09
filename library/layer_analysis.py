@@ -319,7 +319,13 @@ def generate_atlas_region_hcp(atlas_file, out_file, label_list):
     """
     generate a surface roi from a list of atlas labels
     """
+    if not isinstance(label_list, list):
+        label_list = [label_list]
     atlas = nib.load(atlas_file)
+    # convert string labels to indices if necessary
+    label_dict = atlas.labeltable.get_labels_as_dict()
+    index_dict = {label_dict[index]: index for index in label_dict}
+    label_list = [index_dict[label + '_ROI'] if isinstance(label, str) else label for label in label_list]  
     roi_data = np.isin(atlas.darrays[0].data.copy(), label_list).astype(np.int32)
     roi_gii = nib.GiftiImage(
         header=atlas.header,
@@ -359,6 +365,75 @@ def index_roi(roi, idx):
     :return:
     """
     return math_img(f"img=={idx}", img=roi)
+
+def fs_LR_labels_to_native_surf(labels_fs_LR, ciftify_dir, native_pial_surf, native_white_surf, hemi, labels_native_surf_out):
+    # extract subject name from ciftify_dir ( = name of the last directory)
+    subject = os.path.basename(os.path.normpath(ciftify_dir))
+    # set file names
+    fs_LR_sphere = os.path.join(ciftify_dir,"MNINonLinear", 
+                                f"{subject}.{hemi}.sphere.164k_fs_LR.surf.gii")
+    fs_LR_mid_surf = os.path.join(ciftify_dir,"MNINonLinear",
+                                f"{subject}.{hemi}.midthickness.164k_fs_LR.surf.gii")
+    fs_LR_roi = os.path.join(ciftify_dir,"MNINonLinear",
+                            f"{subject}.{hemi}.atlasroi.164k_fs_LR.shape.gii")
+    native_sphere = os.path.join(ciftify_dir,"MNINonLinear","Native",
+                                f"{subject}.{hemi}.sphere.MSMSulc.native.surf.gii")
+    
+    # proceed within temporary directory
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # generate mid surf
+        native_mid_surf = os.path.join(tmpdir, f"{hemi}.mid.func.surf.gii")
+        subprocess.run(["wb_command",
+                "-surface-average",
+                native_mid_surf,
+                "-surf", native_pial_surf,
+                "-surf", native_white_surf])    
+        
+        # resample the labels from fs_LR space to native surface space
+        subprocess.run(["wb_command",
+                        "-label-resample",
+                        labels_fs_LR,
+                        fs_LR_sphere,
+                        native_sphere,
+                        "ADAP_BARY_AREA",
+                        labels_native_surf_out,
+                        "-area-surfs", 
+                        fs_LR_mid_surf,
+                        native_mid_surf,
+                        "-current-roi",
+                        fs_LR_roi],check=True)
+
+def fs_LR_labels_to_native_volume(labels_fs_LR, labels_native_volume_out,
+                                  ciftify_dir, native_pial_surf, native_white_surf, volume_space_file, hemi,
+                                  labels_native_surf_out=None):
+
+    # proceed within temporary directory
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # generate mid surf
+        native_mid_surf = os.path.join(tmpdir, f"{hemi}.mid.func.surf.gii")
+        subprocess.run(["wb_command",
+                "-surface-average",
+                native_mid_surf,
+                "-surf", native_pial_surf,
+                "-surf", native_white_surf])    
+        
+        # resample the labels from fs_LR space to native surface space
+        if labels_native_surf_out is None:
+            labels_native_surf_out = os.path.join(tmpdir, f"{hemi}.native.label.gii")
+        
+
+        fs_LR_labels_to_native_surf(labels_fs_LR, ciftify_dir, native_pial_surf, native_white_surf, hemi, labels_native_surf_out)
+        
+        # now we map the labels to the native volume
+        subprocess.run(["wb_command",
+                    "-label-to-volume-mapping",
+                    labels_native_surf_out,
+                    native_mid_surf,
+                    volume_space_file,
+                    labels_native_volume_out,
+                    "-ribbon-constrained",
+                    native_white_surf,
+                    native_pial_surf],check=True)
 
 
 def fs_LR_label_to_fs_volume(ciftify_dir, analysis_dir, labels, hemi, out_basename):
@@ -661,6 +736,24 @@ def math_cifti(expr, cifti_out, **ciftis):
     subprocess.run(cmd, check=True)
     return cifti_out
 
+def write_metric_gifti(filename, data, hemi):
+    """
+    Write a numpy array as a GIFTI metric file using nibabel.
+    """
+    # Ensure data is 2D (n_vertices,) or (n_vertices, 1)
+    # Create GiftiDataArray
+    gii_data = nib.gifti.GiftiDataArray(data.astype(np.float32))
+    # Set the name metadata to CortexLeft or CortexRight
+    if hemi == 'L':
+        meta = nib.gifti.GiftiMetaData({'AnatomicalStructurePrimary': 'CortexLeft'})
+    elif hemi == 'R':
+        meta = nib.gifti.GiftiMetaData({'AnatomicalStructurePrimary': 'CortexRight'})
+    else:
+        raise ValueError("Invalid hemisphere specified. Use 'L' for left or 'R' for right.")
+    # Create GiftiImage
+    gii_img = nib.gifti.GiftiImage(darrays=[gii_data], meta=meta)
+    # Save to file
+    nib.save(gii_img, filename)
 
 def math_metric(expr, metric_out, **metrics):
     """
@@ -749,7 +842,7 @@ def surf_to_vol_hcp(
 
 
 def sample_surf_hcp(
-    volume_file, white_surf, pial_surf, mid_surf, outfile, mask_file=None, roi_out=None
+    volume_file, white_surf, pial_surf, mid_surf, outfile, mask_file=None, bad_vertices_out=None
 ):
     """
     Samples volume to surface using arbitrary GIFTI surfaces using hcp tools (wb_command).
@@ -780,8 +873,8 @@ def sample_surf_hcp(
         white_surf,
         pial_surf,
     ]
-    if roi_out is not None:
-        cmd_volume_to_surface += ["-bad-vertices-out", roi_out]
+    if bad_vertices_out is not None:
+        cmd_volume_to_surface += ["-bad-vertices-out", bad_vertices_out]
 
     if mask_file is None:
         subprocess.run(cmd_volume_to_surface, check=True)
@@ -803,85 +896,155 @@ def sample_surf_hcp(
         return outfile, mid_surf
 
 
-def smooth_surfmetric_hcp(metric_in, metric_out, mid_surf, fwhm):
-    subprocess.run(
-        [
-            "wb_command",
-            "-metric-smoothing",
-            mid_surf,
-            metric_in,
-            str(fwhm),
-            metric_out,
-            "-fwhm",
-            "-fix-zeros",
-        ],
-        check=True,
-    )
-    return metric_out
+def smooth_surfmetric_hcp(metric_in, metric_out, mid_surf, fwhm=None, sigma=None, 
+                          roi=None):
 
+    # check whether fwhm or sigma is provided
+    if fwhm is None and sigma is None:
+        sigma = 0
+    elif fwhm is not None and sigma is not None:
+        raise ValueError("Either fwhm or sigma can be provided, not both.")
+    elif fwhm is not None:
+        sigma = fwhm / 2.355  # convert fwhm to sigma
+
+    if sigma == 0:
+        # if sigma is 0, just copy the metric
+        if metric_in != metric_out:
+            copy2(metric_in, metric_out)
+        return metric_out
+    else:
+        cmd = ["wb_command",
+                "-metric-smoothing",
+                mid_surf,
+                metric_in,
+                str(sigma),
+                metric_out]
+        if roi is not None:
+            cmd += ["-roi", roi]
+        # note: I removed fix-zeros option to avoid potential issues with zero values
+        # using a mask (roi) is the better approach to treat missing data
+        subprocess.run(cmd, check=True)
+        return metric_out
 
 def transform_data_native_surf_to_fs_LR(
-    data_native_surf, data_fs_LR_surf, native_mid_surf, hemi, ciftify_dir
+    data_native_surf, data_fs_LR_surf, native_mid_surf, hemi, ciftify_dir, bad_vertices=None, 
+    coverage_fs_LR_surf=None, smooth_sigma=None
 ):
-    # find names (subject) of native anf fs_LR spheres
-    native_sphere = glob.glob(
-        os.path.join(
-            ciftify_dir,
-            "MNINonLinear",
-            "Native",
-            f"*.{hemi}.sphere.MSMSulc.native.surf.gii",
-        )
-    )[0]
-    fs_LR_sphere = glob.glob(
-        os.path.join(
-            ciftify_dir, "MNINonLinear", f"*.{hemi}.sphere.164k_fs_LR.surf.gii"
-        )
-    )[0]
+    """
+    Transforms surface data from native surface space to fs_LR space using HCP tools (wb_command).
+    - requires ciftify output directory to find necessary surfaces
+    - if bad_vertices is provided, it should be a shape.gii file with 1s for bad vertices and 0s for good vertices
+    - if smooth_sigma is provided, it will be used to smooth the data on the native surface before resampling
+    - if coverage_fs_LR_surf is provided, it will be used to output the coverage of the resampling
+    :return: data_fs_LR_surf, coverage_fs_LR_surf
+    """
 
-    # find name of fs_LR midthickness (for area correction)
-    fs_LR_mid_surf = glob.glob(
-        os.path.join(
-            ciftify_dir, "MNINonLinear", f"*.{hemi}.midthickness.164k_fs_LR.surf.gii"
-        )
-    )[0]
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        # find names (subject) of native and fs_LR spheres
+        native_sphere = glob.glob(
+            os.path.join(
+                ciftify_dir,
+                "MNINonLinear",
+                "Native",
+                f"*.{hemi}.sphere.MSMSulc.native.surf.gii",
+            )
+        )[0]
+        fs_LR_sphere = glob.glob(
+            os.path.join(
+                ciftify_dir, "MNINonLinear", f"*.{hemi}.sphere.164k_fs_LR.surf.gii"
+            )
+        )[0]
 
-    # find names of surface rois to exclude medial wall
-    native_surf_roi = glob.glob(
-        os.path.join(
-            ciftify_dir, "MNINonLinear", "Native", f"*.{hemi}.roi.native.shape.gii"
-        )
-    )[0]
-    fs_LR_surf_roi = glob.glob(
-        os.path.join(
-            ciftify_dir, "MNINonLinear", f"*.{hemi}.atlasroi.164k_fs_LR.shape.gii"
-        )
-    )[0]
+        # find name of fs_LR midthickness (for area correction)
+        fs_LR_mid_surf = glob.glob(
+            os.path.join(
+                ciftify_dir, "MNINonLinear", f"*.{hemi}.midthickness.164k_fs_LR.surf.gii"
+            )
+        )[0]
 
-    cmd1 = [
-        "wb_command",
-        "-metric-resample",
-        data_native_surf,
-        native_sphere,
-        fs_LR_sphere,
-        "ADAP_BARY_AREA",
-        data_fs_LR_surf,
-        "-area-surfs",
-        native_mid_surf,
-        fs_LR_mid_surf,
-        "-current-roi",
-        native_surf_roi,
-    ]
+        # find names of surface rois to exclude medial wall
+        native_surf_roi = glob.glob(
+            os.path.join(
+                ciftify_dir, "MNINonLinear", "Native", f"*.{hemi}.roi.native.shape.gii"
+            )
+        )[0]
+        fs_LR_surf_roi = glob.glob(
+            os.path.join(
+                ciftify_dir, "MNINonLinear", f"*.{hemi}.atlasroi.164k_fs_LR.shape.gii"
+            )
+        )[0]
 
-    cmd2 = [
-        "wb_command",
-        "-metric-mask",
-        data_fs_LR_surf,
-        fs_LR_surf_roi,
-        data_fs_LR_surf,
-    ]
+        # if roi that specifies where original metric is defined is provided, combine it with native surface roi
+        # by calculating the logical and between both metric files
+        if bad_vertices is not None:
+            combined_native_surf_roi = os.path.join(
+                tmpdirname, "combined_native_surf_roi.shape.gii"
+            )
+            cmd0 = [
+                "wb_command",
+                "-metric-math",
+                "!(img1) && img2",
+                combined_native_surf_roi,
+                "-var",
+                "img1",
+                bad_vertices,
+                "-var",
+                "img2",
+                native_surf_roi,
+            ]
+            subprocess.run(cmd0, check=True, stdout=subprocess.DEVNULL)
+            native_surf_roi = combined_native_surf_roi
 
-    subprocess.run(cmd1, check=True)
-    subprocess.run(cmd2, check=True)
+        if smooth_sigma is not None and smooth_sigma > 0:
+            # smooth the data native surface metric before resampling
+            cmd_smooth = [
+                "wb_command",
+                "-metric-smoothing",
+                native_mid_surf,
+                data_native_surf,
+                str(smooth_sigma),
+                data_native_surf,
+                "-roi",
+                native_surf_roi,
+            ]
+            subprocess.run(cmd_smooth, check=True)
+
+        cmd1 = [
+            "wb_command",
+            "-metric-resample",
+            data_native_surf,
+            native_sphere,
+            fs_LR_sphere,
+            "ADAP_BARY_AREA",
+            data_fs_LR_surf,
+            "-area-surfs",
+            native_mid_surf,
+            fs_LR_mid_surf,
+            "-current-roi",
+            native_surf_roi,
+        ]
+        if coverage_fs_LR_surf is not None:
+            cmd1 += ["-valid-roi-out", coverage_fs_LR_surf]
+
+        cmd2 = [
+            "wb_command",
+            "-metric-mask",
+            data_fs_LR_surf,
+            fs_LR_surf_roi,
+            data_fs_LR_surf,
+        ]
+
+        subprocess.run(cmd1, check=True)
+        subprocess.run(cmd2, check=True)
+        if coverage_fs_LR_surf is not None:
+            cmd3 = [
+            "wb_command",
+            "-metric-mask",
+            coverage_fs_LR_surf,
+            fs_LR_surf_roi,
+            coverage_fs_LR_surf,
+        ]
+
     return data_fs_LR_surf
 
 
@@ -911,7 +1074,8 @@ def sample_layer_to_fs_LR(
     depth_range=[0, 1],
     mask=None,
     depth_file=None,
-):
+    coverage_out=None,
+    smooth_sigma=None):
     # if depth_file provided, use it to calculate mask, otherwise generate intermediate layer surfaces
     # depth_range: 0 = wm boundary, 1 = pial surface
 
@@ -919,6 +1083,10 @@ def sample_layer_to_fs_LR(
         mid_surf = os.path.join(tmpdirname, "mid.surf.gii")
         data_native_surf = os.path.join(tmpdirname, "data_native_surf.func.gii")
         mask_file = os.path.join(tmpdirname, "mask.nii")
+        if coverage_out is not None:
+            bad_vertices_out = os.path.join(tmpdirname, "bad_vertices.native.shape.gii")
+        else:
+            bad_vertices_out = None
 
         # 1. generate boundary surfaces or compute layer mask
         if depth_file:
@@ -956,9 +1124,6 @@ def sample_layer_to_fs_LR(
         if isinstance(mask, nib.nifti1.Nifti1Image):
             nib.save(mask, mask_file)
             mask = mask_file
-        # print(nib.load(mask_file).affine)
-        # print(nib.load(volume_file).affine)
-        # print(depth_surfs)
         data_native_surf, mid_surf = sample_surf_hcp(
             volume_file,
             depth_surfs[0],
@@ -966,11 +1131,15 @@ def sample_layer_to_fs_LR(
             mid_surf,
             outfile=data_native_surf,
             mask_file=mask,
+            bad_vertices_out=bad_vertices_out,
         )
+
         # 3. resample to fs_LR
         output_file = transform_data_native_surf_to_fs_LR(
-            data_native_surf, output_file, mid_surf, hemi, ciftify_dir
+            data_native_surf, output_file, mid_surf, hemi, ciftify_dir, bad_vertices=bad_vertices_out, 
+            coverage_fs_LR_surf=coverage_out, smooth_sigma=smooth_sigma
         )
+       
 
     return output_file
 
@@ -983,8 +1152,7 @@ def sample_surf_func_stat(
     n_depths=12,
     hemi=None,
     force=False,
-    depths=None,
-):
+    depths=None):
     # sample stat to a number of intermediate surfaces
     stat_file_dir = os.path.dirname(os.path.abspath(stat_file))
     stat_file_base = fsl_remove_ext(os.path.basename(os.path.abspath(stat_file)))
@@ -1058,8 +1226,7 @@ def get_stat_cluster_roi(
     thickness_files=None,
     fwhm=5,
     threshold=2,
-    force=False,
-):
+    force=False):
     stat_cluster_labels = dict()
     for hemi in ["lh", "rh"]:
         # 1. take activation map and project to surface
@@ -1110,8 +1277,7 @@ def get_stat_cluster_atlas(
     fwhm=5,
     threshold=2,
     force=False,
-    dont_repeat_sample_and_smooth=False,
-):
+    dont_repeat_sample_and_smooth=False):
     stat_file_dir = os.path.dirname(os.path.abspath(stat_file))
     stat_file_base = fsl_remove_ext(os.path.basename(os.path.abspath(stat_file)))
     stat_surf_smooth = os.path.join(
@@ -1169,8 +1335,7 @@ def get_funcloc_roi(
     stat_name="zstat1",
     fwhm=5,
     funcloc_labels=None,
-    force=False,
-):
+    force=False):
     if feat_dir == None:
         feat_dir = os.path.join(analysis_dir, "funcloc.feat")
     stat_file = os.path.join(feat_dir, "stats", stat_name + ".nii.gz")
@@ -1212,8 +1377,7 @@ def get_md_roi(
     ciftify_dir=None,
     fs_to_func_reg=None,
     md_labels=None,
-    force=False,
-):
+    force=False):
     """Returns a multiple-demand network ROI (Moataz et al. 2020) transformed to functional space"""
     if md_labels == None:
         md_labels = {
@@ -1239,8 +1403,7 @@ def get_glasser_roi(
     ciftify_dir=None,
     fs_to_func_reg=None,
     glasser_labels=None,
-    force=False,
-):
+    force=False):
     """Returns a HCP MMP 1.0 atlas ROI (Glasser et al. 2016) transformed to functional space"""
     if glasser_labels == None:
         glasser_labels = {
@@ -1259,7 +1422,7 @@ def get_glasser_roi(
     )
     return roi
 
-
+# Trial averaging related
 def calc_stim_times(onset_delay, trial_duration, trial_order, condition_names=None):
     n = len(trial_order)
     t = np.arange(0, n) * trial_duration + onset_delay
@@ -1267,7 +1430,6 @@ def calc_stim_times(onset_delay, trial_duration, trial_order, condition_names=No
     for condition in set(trial_order):
         stim_times[condition] = t[np.array(trial_order) == condition]
     return stim_times
-
 
 def write_stim_time_files(stim_times_runs, cwd=None):
     if cwd == None:
@@ -1286,6 +1448,61 @@ def write_stim_time_files(stim_times_runs, cwd=None):
                 print(*stim_times[condition], file=file)
     return condition_stim_files
 
+def average_trials_vaso_3ddeconvolve(in_files_nulled, in_files_notnulled, 
+                                     stim_times_runs, trial_duration, out_dir, desc=None,
+                                     polort=5, vaso_readout_delay=None, tentzero=False):
+    """Runs trial averaging on nulled and notnulled VASO data separately before
+    performing VASO bold correction on the averaged data.
+    """
+    if vaso_readout_delay is None:
+        # assume half of TR
+        vaso_readout_delay = 0.5 * nib.load(in_files_nulled[0]).header.get_zooms()[3]
+
+    if desc is not None:
+        desc = f"_{desc}"
+
+    with tempfile.TemporaryDirectory() as tmp_dir:        
+        # trial averaging for nulled and notnulled data separately
+        trialavg_files_nulled, baseline_file_nulled, fstat_file_nulled = average_trials_3ddeconvolve(
+            in_files_nulled,
+            stim_times_runs,
+            trial_duration,
+            out_files_basename=os.path.join(tmp_dir, f'trialavg_nulled{desc}'),
+            polort=polort,
+            tentzero=tentzero,
+            cwd=tmp_dir)
+
+        trialavg_files_notnulled, baseline_file_notnulled, fstat_file_notnulled = average_trials_3ddeconvolve(
+            in_files_notnulled,
+            stim_times_runs,
+            trial_duration,
+            out_files_basename=os.path.join(tmp_dir, f'trialavg_notnulled{desc}'),
+            polort=polort,
+            onset_shift=vaso_readout_delay,
+            tentzero=tentzero,
+            cwd=tmp_dir)
+
+        # bold correction on the averaged data, which contains one trial average per condition
+        trialavg_files_vaso = []
+        for trialavg_file_nulled, trialavg_file_notnulled in zip(trialavg_files_nulled, trialavg_files_notnulled):
+            trialavg_file_vaso = trialavg_file_nulled.replace("nulled", "vaso")
+            bold_correct(trialavg_file_nulled, trialavg_file_notnulled, trialavg_file_vaso)
+            trialavg_files_vaso.append(trialavg_file_vaso)
+        baseline_file_vaso = baseline_file_nulled.replace("nulled", "vaso")
+        bold_correct(baseline_file_nulled, baseline_file_notnulled, baseline_file_vaso)                     
+
+        # calculate percent signal change
+        trialavgs_notnulled_prcchg = calc_percent_change_trialavg(trialavg_files_notnulled, baseline_file_notnulled)
+        trialavgs_vaso_prcchg = calc_percent_change_trialavg(trialavg_files_vaso, baseline_file_vaso, inv_change=True)
+
+        # save results by copying
+        for trialavg_notnulled_prcchg, trialavg_vaso_prcchg in zip(trialavgs_notnulled_prcchg, trialavgs_vaso_prcchg):
+            copy2(trialavg_notnulled_prcchg, 
+                  os.path.join(out_dir, os.path.basename(trialavg_notnulled_prcchg).replace("notnulled", "bold")))
+            copy2(trialavg_vaso_prcchg, os.path.join(out_dir, os.path.basename(trialavg_vaso_prcchg)))  
+        copy2(fstat_file_notnulled, os.path.join(out_dir, os.path.basename(fstat_file_notnulled)).replace("notnulled", "bold"))
+        copy2(fstat_file_nulled, os.path.join(out_dir, os.path.basename(fstat_file_nulled)))
+ 
 
 def average_trials_3ddeconvolve(
     in_files,
@@ -1297,8 +1514,7 @@ def average_trials_3ddeconvolve(
     cwd=None,
     tentzero=False,
     force=None,
-    IM=False,
-):
+    IM=False):
     if cwd == None:
         cwd = os.path.dirname(os.path.normpath(in_files[0]))
     n_files = len(in_files)
@@ -1449,8 +1665,7 @@ def calc_percent_change_trialavg(
     trialavg_files,
     baseline_file,
     inv_change=False,
-    force=False,
-):
+    force=False):
     if inv_change:
         expr = "100-(100*a/b)"
     else:
@@ -1476,8 +1691,7 @@ def calc_percent_change_trialavg(
 def calc_normalized_trialavg(
     trialavg_files,
     baseline_vols=None,
-    force=False,
-):
+    force=False):
     """
     Normalizes trial average by adding back baseline and dividing by mean from defined baseline volumes
     """
@@ -1558,8 +1772,7 @@ def add_postfix_to_nifti_basename(path, postfix):
 
 
 def get_funcact_roi_laynii(
-    act_file, rim_file, roi_out_file, n_columns=10000, threshold=1
-):
+    act_file, rim_file, roi_out_file, n_columns=10000, threshold=1):
     columns_file = add_postfix_to_nifti_basename(rim_file, "_columns" + str(n_columns))
     if not os.path.isfile(columns_file):
         mid_gm_file = add_postfix_to_nifti_basename(rim_file, "_midGM_equidist")
@@ -1636,8 +1849,7 @@ def mask_image(img, mask):
 
 
 def bold_correct(
-    nulled_file, notnulled_file, out_file, notnulled_shift=None, force=None
-):
+    nulled_file, notnulled_file, out_file, notnulled_shift=None, force=None):
     """notnulled_shift should equal (positive) difference between readout blocks"""
     if not os.path.isfile(out_file) or force == True:
         if notnulled_shift is not None:
@@ -1680,8 +1892,7 @@ def sample_timecourse(func_filename, roi):
 
 
 def calc_layers_laynii(
-    rim_file, out_file_base=None, method="equidist", n_layers=3, force=False
-):
+    rim_file, out_file_base=None, method="equidist", n_layers=3, force=False):
     # include upsampling methods?
     if out_file_base is None:
         out_file_base = fsl_remove_ext(rim_file)
@@ -1753,6 +1964,11 @@ def sample_depths(data, roi, depths):
     roi_reset = reset_affine(roi)
     depths_reset = reset_affine(depths)
 
+    # binarize roi
+    roi_data = roi_reset.get_fdata()
+    roi_data[roi_data != 0] = 1
+    roi_reset = nib.Nifti1Image(roi_data, roi_reset.affine, roi_reset.header)
+
     masked_data = apply_mask(data_reset, roi_reset)
     masked_depths = apply_mask(depths_reset, roi_reset)
     return masked_data, masked_depths
@@ -1766,6 +1982,140 @@ def sample_layer_profile(data, roi, depths, n_layers):
         y[i] = np.mean(data[depths == i])
     return y, (np.arange(n_layers) + 0.5) / n_layers
 
+
+def sample_temporal_layer_data_to_df(data_fname, roi_fname, depths_fname, layers_dict, 
+                                     tentzero=False):
+    """
+    Sample temporal layer data and return as a pandas DataFrame.
+    
+    This function extracts layer-specific temporal signals from temporal data within
+    a specified ROI and organizes the results in a structured DataFrame format.
+    
+    Parameters
+    ----------
+    data_fname : str or dict
+        Path to NIfTI file containing data with shape (x, y, z, t).
+        If a dictionary is provided, it should map condition names to file paths.
+        Example: {'condition1': 'path/to/condition1.nii', 'condition2': 'path/to/condition2.nii'}.
+    roi_fname : str
+        Path to NIfTI file containing ROI mask with shape (x, y, z).
+    depths_fname : str
+        Path to NIfTI file containing relative cortical depths with shape (x, y, z).
+    layers_dict : dict
+        Dictionary mapping layer names to depth range tuples, e.g., 
+        {'superficial': (0.5, 1.0), 'deep': (0.0, 0.5)}.
+    tentzero : bool, optional
+        If True, insert zeros at the beginning and end of the time series.
+        Default is False.
+    
+    Returns
+    -------
+    df: pd.DataFrame
+        DataFrame with columns: timepoint, layer, depth, signal.
+        Each row represents the average signal for a layer at a specific timepoint.
+    """
+    if isinstance(data_fname, dict):
+        df_list = []
+        for condition, fname in data_fname.items():
+            df_condition = sample_temporal_layer_data_to_df(fname, roi_fname, depths_fname, layers_dict, tentzero)
+            df_condition['condition'] = condition
+            df_list.append(df_condition)
+        df = pd.concat(df_list, ignore_index=True)
+        return df
+
+    sampled_data, sampled_depths = sample_depths(data_fname, roi_fname, depths_fname)
+
+    df = pd.DataFrame(columns=["timepoint","layer","depth","signal"])
+    if sampled_data is not None:
+        for layer, layer_boundaries in layers_dict.items():
+            signal = np.nanmean(sampled_data[:,(sampled_depths >= layer_boundaries[0]) &
+                                               (sampled_depths <= layer_boundaries[1])], axis=1)
+
+            if tentzero:
+                signal = np.insert(signal, [0, len(signal)], 0)
+
+            df = pd.concat([df, pd.DataFrame({"timepoint": np.arange(len(signal)),
+                                              "layer": layer,
+                                              "depth": 1 - np.mean(layer_boundaries),
+                                              "signal": signal})], ignore_index=True)
+    return df
+
+def calculate_df_condition_contrasts(df, contrasts_dict):
+    """
+    Calculate differential contrasts between conditions in a DataFrame of sampled temporal layer data,
+    and creates a new DataFrame with the contrast signals.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame with columns including 'condition' and 'signal'. Other columns will be preserved.
+    contrasts_dict : dict
+        Dictionary mapping contrast names to tuples of condition names.  The contrast is 
+        calculated as condition1 - condition2, etc.
+        Example: {'contrast1': ['condition1', 'condition2'], 'contrast2': ['condition3', 'condition4']}.
+    
+    Returns
+    -------
+    contrasts_df : pd.DataFrame
+        DataFrame with same structure as input but with 'condition' replaced by contrast names
+        and 'signal' containing the contrast values.
+    """    
+    # Get all columns except 'condition' and 'signal' for merging
+    merge_cols = [col for col in df.columns if col not in ['condition', 'signal']]
+    
+    # Get all columns except 'signal' for the final output structure
+    output_cols = [col for col in df.columns if col != 'signal'] + ['signal']
+    
+    df_contrasts = pd.DataFrame(columns=df.columns)
+    for contrast_name, conditions in contrasts_dict.items():
+            condition1_data = df[df['condition'] == conditions[0]]
+            condition2_data = df[df['condition'] == conditions[1]]
+            merged_data = pd.merge(condition1_data, condition2_data, on=merge_cols, suffixes=('_c1', '_c2'))
+            merged_data['signal'] = merged_data['signal_c1'] - merged_data['signal_c2']
+            merged_data['condition'] = contrast_name
+            df_contrasts = pd.concat([df_contrasts, merged_data[output_cols]], ignore_index=True)
+    return df_contrasts
+
+def calculate_df_period_averages(df, periods_dict):
+    """
+    Calculate average signals for specified periods in a DataFrame of sampled temporal layer data.
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame with columns: subject, timepoint, condition, layer, depth, signal.
+    periods_dict : dict
+        Dictionary mapping period names to lists of timepoints.
+        Example: {'delay': [0, 1, 2], 'response': [3, 4, 5]}.
+    """
+    # Get all columns except 'timepoint' and 'signal' for grouping
+    grouping_cols = [col for col in df.columns if col not in ['timepoint', 'signal']]
+    
+    # Create list to store results for each period
+    period_dfs = []
+    
+    for period_name, period_timepoints in periods_dict.items():
+        # Filter data for this period's timepoints
+        period_data = df[df['timepoint'].isin(period_timepoints)].copy()
+        
+        if len(period_data) > 0:
+            # Group by all columns except timepoint and signal, then aggregate
+            period_avg = (period_data
+                         .groupby(grouping_cols, as_index=False)
+                         .agg({'signal': 'mean'})
+                         .assign(period=period_name))
+            
+            period_dfs.append(period_avg)
+    
+    # Concatenate all periods
+    if period_dfs:
+        df_avg = pd.concat(period_dfs, ignore_index=True)
+        # Reorder columns to have period after the grouping columns
+        cols = grouping_cols + ['period', 'signal']
+        df_avg = df_avg[cols]
+    else:
+        df_avg = pd.DataFrame()
+    
+    return df_avg
 
 def plot_profiles(data_list, roi, depths, n_layers, colors=None, labels=None):
     ax = plt.axes()
@@ -1835,11 +2185,15 @@ def get_labels_data(
                 d = sample_roi(data_file, roi)
                 if layers is not None:
                     l = sample_roi(layers, roi)
-                    df = df.append(
+                    df = pd.concat([
+                        df,
                         pd.DataFrame({"value": d, "layer": l}).assign(label=label_name)
-                    )
+                    ], ignore_index=True)
                 else:
-                    df = df.append(pd.DataFrame({"value": d}).assign(label=label_name))
+                    df = pd.concat([
+                        df,
+                        pd.DataFrame({"value": d}).assign(label=label_name)
+                    ], ignore_index=True)
                 if print_results:
                     m, s, n = average_roi(data_file, roi)
                     print(
