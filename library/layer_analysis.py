@@ -319,7 +319,13 @@ def generate_atlas_region_hcp(atlas_file, out_file, label_list):
     """
     generate a surface roi from a list of atlas labels
     """
+    if not isinstance(label_list, list):
+        label_list = [label_list]
     atlas = nib.load(atlas_file)
+    # convert string labels to indices if necessary
+    label_dict = atlas.labeltable.get_labels_as_dict()
+    index_dict = {label_dict[index]: index for index in label_dict}
+    label_list = [index_dict[label + '_ROI'] if isinstance(label, str) else label for label in label_list]  
     roi_data = np.isin(atlas.darrays[0].data.copy(), label_list).astype(np.int32)
     roi_gii = nib.GiftiImage(
         header=atlas.header,
