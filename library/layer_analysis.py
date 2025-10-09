@@ -736,6 +736,24 @@ def math_cifti(expr, cifti_out, **ciftis):
     subprocess.run(cmd, check=True)
     return cifti_out
 
+def write_metric_gifti(filename, data, hemi):
+    """
+    Write a numpy array as a GIFTI metric file using nibabel.
+    """
+    # Ensure data is 2D (n_vertices,) or (n_vertices, 1)
+    # Create GiftiDataArray
+    gii_data = nib.gifti.GiftiDataArray(data.astype(np.float32))
+    # Set the name metadata to CortexLeft or CortexRight
+    if hemi == 'L':
+        meta = nib.gifti.GiftiMetaData({'AnatomicalStructurePrimary': 'CortexLeft'})
+    elif hemi == 'R':
+        meta = nib.gifti.GiftiMetaData({'AnatomicalStructurePrimary': 'CortexRight'})
+    else:
+        raise ValueError("Invalid hemisphere specified. Use 'L' for left or 'R' for right.")
+    # Create GiftiImage
+    gii_img = nib.gifti.GiftiImage(darrays=[gii_data], meta=meta)
+    # Save to file
+    nib.save(gii_img, filename)
 
 def math_metric(expr, metric_out, **metrics):
     """
